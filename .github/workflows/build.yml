@@ -1,0 +1,64 @@
+name: Build RecoverSD
+
+# Genera los ejecutables en la nube:
+#   - Windows -> RecoverSD.exe   (se compila en una maquina Windows)
+#   - macOS   -> RecoverSD.app   (se compila en una Mac)
+#
+# Se dispara a mano (boton "Run workflow") o al publicar un tag vX.Y.Z,
+# en cuyo caso ademas adjunta los ejecutables a una Release de GitHub.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: RecoverSD-Windows
+          - os: macos-latest
+            name: RecoverSD-macOS
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Comprobar sintaxis
+        run: python -m py_compile recover.py gui.py
+
+      - name: Instalar PyInstaller
+        run: pip install pyinstaller
+
+      - name: Construir ejecutable
+        run: pyinstaller --noconfirm --onefile --windowed --name RecoverSD gui.py
+
+      - name: Empaquetar (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/RecoverSD.app ${{ matrix.name }}.zip
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/RecoverSD.exe -DestinationPath ${{ matrix.name }}.zip
+
+      - name: Subir artefacto (descargable desde la corrida)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.zip
+
+      - name: Publicar en la Release (solo al crear un tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.name }}.zip

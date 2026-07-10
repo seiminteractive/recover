@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller (se regeneran al compilar)
+build/
+dist/
+*.spec
+
+# Imagenes de prueba / clones de tarjetas (pesados)
+*.img
+*.dd
+*.raw
