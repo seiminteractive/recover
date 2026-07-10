@@ -122,30 +122,46 @@ class Reader:
 # --------------------------------------------------------------------------- #
 #  Listado de discos (para la interfaz y para --list). Best-effort por SO.
 # --------------------------------------------------------------------------- #
+CREATE_NO_WINDOW = 0x08000000
+LAST_LIST_ERROR = ""
+
+
+def _run(cmd, text=True):
+    """subprocess.run robusto: sirve tambien en apps empaquetadas sin consola."""
+    kwargs = dict(capture_output=True, text=text, stdin=subprocess.DEVNULL)
+    if sys.platform == "win32":
+        kwargs["creationflags"] = CREATE_NO_WINDOW   # sin ventana de consola
+    return subprocess.run(cmd, **kwargs)
+
+
 def list_disks():
-    """Devuelve [{'path','name','size','internal'}]. [] si no se pudo."""
+    """Devuelve [{'path','name','size','internal'}] (extraibles primero). [] si falla."""
+    global LAST_LIST_ERROR
+    LAST_LIST_ERROR = ""
     try:
         if sys.platform == "darwin":
-            return _mac_disks()
-        if sys.platform == "win32":
-            return _win_disks()
-        if sys.platform.startswith("linux"):
-            return _linux_disks()
+            disks = _mac_disks()
+        elif sys.platform == "win32":
+            disks = _win_disks()
+        elif sys.platform.startswith("linux"):
+            disks = _linux_disks()
+        else:
+            disks = []
+        disks.sort(key=lambda d: (d["internal"], str(d["path"])))
+        return disks
     except Exception:
+        import traceback
+        LAST_LIST_ERROR = traceback.format_exc().strip()
         return []
-    return []
 
 
 def _mac_disks():
     import plistlib
-    out = subprocess.run(["diskutil", "list", "-plist", "physical"],
-                         capture_output=True).stdout
+    out = _run(["diskutil", "list", "-plist", "physical"], text=False).stdout
     names = plistlib.loads(out).get("WholeDisks", [])
     disks = []
     for name in names:
-        info = subprocess.run(["diskutil", "info", "-plist", name],
-                              capture_output=True).stdout
-        di = plistlib.loads(info)
+        di = plistlib.loads(_run(["diskutil", "info", "-plist", name], text=False).stdout)
         disks.append({
             "path": "/dev/" + name,
             "name": di.get("MediaName") or di.get("IORegistryEntryName") or name,
@@ -156,28 +172,35 @@ def _mac_disks():
 
 
 def _win_disks():
-    ps = "Get-Disk | Select-Object Number,FriendlyName,Size,BusType | ConvertTo-Json"
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                         capture_output=True, text=True).stdout
+    # Win32_DiskDrive lista TODOS los discos fisicos, incluidos los lectores USB
+    # de tarjetas SD (Get-Disk suele omitirlos). DeviceID ya es la ruta a abrir
+    # (ej: \\.\PHYSICALDRIVE2).
+    ps = ("Get-CimInstance Win32_DiskDrive | "
+          "Select-Object DeviceID,Model,Size,InterfaceType,MediaType | "
+          "ConvertTo-Json -Compress")
+    out = (_run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", ps]).stdout or "").strip()
+    if not out:
+        return []
     data = json.loads(out)
     if isinstance(data, dict):
         data = [data]
     disks = []
     for d in data:
-        bus = str(d.get("BusType", ""))
+        iface = str(d.get("InterfaceType") or "")
+        media = str(d.get("MediaType") or "")
+        removable = ("Removable" in media) or (iface == "USB")
         disks.append({
-            "path": f"\\\\.\\PhysicalDrive{d['Number']}",
-            "name": d.get("FriendlyName") or "Disco",
+            "path": d.get("DeviceID") or "",
+            "name": (d.get("Model") or "Disco").strip(),
             "size": d.get("Size"),
-            "internal": bus not in ("USB", "SD", "MMC"),
+            "internal": not removable,
         })
     return disks
 
 
 def _linux_disks():
-    out = subprocess.run(
-        ["lsblk", "-dbno", "NAME,SIZE,MODEL,RM", "--json"],
-        capture_output=True, text=True).stdout
+    out = _run(["lsblk", "-dbno", "NAME,SIZE,MODEL,RM", "--json"]).stdout
     disks = []
     for d in json.loads(out).get("blockdevices", []):
         disks.append({

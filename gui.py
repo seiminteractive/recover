@@ -126,6 +126,15 @@ class App(tk.Tk):
         ttk.Button(row, text="Actualizar", command=self._load_disks).pack(side="left")
         ttk.Button(row, text="Usar una imagen .img...", command=self._pick_image).pack(side="left", padx=8)
 
+        manual = ttk.Frame(self.container)
+        manual.pack(fill="x", pady=(8, 0))
+        ttk.Label(manual, text="o ruta manual:").pack(side="left")
+        self.manual_var = tk.StringVar()
+        ttk.Entry(manual, textvariable=self.manual_var).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(manual, text="Usar", command=self._use_manual).pack(side="left")
+        hint = "\\\\.\\PhysicalDrive2" if sys.platform == "win32" else "/dev/disk4"
+        ttk.Label(self.container, foreground="#777", text=f"(ej: {hint})").pack(anchor="w")
+
         self.source_info = ttk.Label(self.container, wraplength=500, justify="left", text="")
         self.source_info.pack(anchor="w", pady=(10, 0))
 
@@ -134,17 +143,33 @@ class App(tk.Tk):
         self._load_disks()
 
     def _load_disks(self):
+        self.disk_list.config(state="normal")
         self.disk_list.delete(0, "end")
         self.disks = recover.list_disks()
         if not self.disks:
-            self.disk_list.insert("end", "  (no se detectaron discos: usa 'Usar una imagen .img...')")
-            self.disk_list.config(state="disabled")
+            self.disk_list.insert("end", "  (no se detectaron discos automaticamente)")
+            for ln in (recover.LAST_LIST_ERROR or "").splitlines()[-2:]:
+                self.disk_list.insert("end", "  " + ln[:80])
+            self.disk_list.insert("end", "  -> usa 'Usar una imagen...' o la ruta manual")
             return
-        self.disk_list.config(state="normal")
         for d in self.disks:
             tag = "SISTEMA" if d["internal"] else "extraible"
             self.disk_list.insert(
                 "end", f"  {recover.human(d['size']):>10}  [{tag}]  {d['name']}  ({d['path']})")
+
+    def _use_manual(self):
+        path = self.manual_var.get().strip()
+        if not path:
+            return
+        self.source = path
+        self.source_internal = False
+        self.source_label = path
+        self.source_info.config(foreground="", text=f"Seleccionado (manual): {path}")
+        try:
+            self.disk_list.selection_clear(0, "end")
+        except tk.TclError:
+            pass
+        self.src_next.state(["!disabled"])
 
     def _on_disk_select(self, _evt):
         if not self.disks:
